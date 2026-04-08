@@ -1,7 +1,7 @@
 {
   "name": "antigravity-bus",
   "version": "0.1.0",
-  "description": "A local event and state bus for Antigravity: discover language server instances, observe workspaces, and collect artifact snapshots.",
+  "description": "A local-first observability bus for Antigravity: discover language server instances, snapshot workspace activity, and persist machine-readable state for review loops.",
   "type": "module",
   "private": false,
   "bin": {
@@ -10,7 +10,20 @@
   "scripts": {
     "discover": "node ./src/index.mjs discover",
     "snapshot": "node ./src/index.mjs snapshot",
-    "watch": "node ./src/index.mjs watch"
+    "watch": "node ./src/index.mjs watch",
+    "test": "node --test"
+  },
+  "files": [
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "keywords": [
     "antigravity",
@@ -18,7 +31,19 @@
     "bus",
     "supervisor",
     "observability",
-    "local-first"
+    "local-first",
+    "cli",
+    "language-server",
+    "sqlite"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "author": "karzanOnline",
+  "homepage": "https://github.com/karzanOnline/antigravity-bus",
+  "bugs": {
+    "url": "https://github.com/karzanOnline/antigravity-bus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karzanOnline/antigravity-bus.git"
+  }
 }

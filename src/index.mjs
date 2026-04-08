@@ -22,7 +22,7 @@ const LOGS_DIR = path.join(APP_SUPPORT_DIR, "logs");
 const DEFAULT_STORE_DIR = path.join(process.cwd(), ".cowork-temp", "antigravity-bus");
 const RECENT_TASK_WINDOW_MS = 1000 * 60 * 60 * 24 * 2;
 
-function run(command, args, options = {}) {
+export function run(command, args, options = {}) {
   try {
     return execFileSync(command, args, {
       encoding: "utf8",
@@ -34,7 +34,7 @@ function run(command, args, options = {}) {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const [command = "snapshot", ...rest] = argv;
   const options = {
     command,
@@ -62,11 +62,11 @@ function parseArgs(argv) {
   return options;
 }
 
-function ensureDir(dirPath) {
+export function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
-function readStateValue(key) {
+export function readStateValue(key) {
   if (!fs.existsSync(STATE_DB_PATH)) {
     return null;
   }
@@ -76,7 +76,7 @@ function readStateValue(key) {
   return value || null;
 }
 
-function extractPrintableStrings(buffer, minLength = 8) {
+export function extractPrintableStrings(buffer, minLength = 8) {
   const matches = [];
   let start = -1;
 
@@ -109,7 +109,7 @@ function extractPrintableStrings(buffer, minLength = 8) {
   return matches;
 }
 
-function decodeBase64Strings(key) {
+export function decodeBase64Strings(key) {
   const raw = readStateValue(key);
   if (!raw) {
     return [];
@@ -123,39 +123,44 @@ function decodeBase64Strings(key) {
   }
 }
 
-function discoverInstances() {
+export function parseInstanceLine(line) {
+  if (!line.includes("language_server_macos_arm")) {
+    return null;
+  }
+
+  // Antigravity exposes most runtime coordination data as CLI flags on the LS process.
+  const trimmed = line.trim();
+  const [pidToken, ...commandParts] = trimmed.split(/\s+/);
+  const command = commandParts.join(" ");
+  const readFlag = (flag) => command.match(new RegExp(`--${flag}\\s+(.+?)(?=\\s+--[a-z_]+\\s|\\s+--[a-z_]+$|$)`))?.[1] ?? null;
+  const csrfToken = readFlag("csrf_token");
+  const extensionServerPort = readFlag("extension_server_port");
+  const extensionServerCsrfToken = readFlag("extension_server_csrf_token");
+  const workspaceId = readFlag("workspace_id");
+  const cloudCodeEndpoint = readFlag("cloud_code_endpoint");
+  const appDataDir = readFlag("app_data_dir");
+
+  return {
+    pid: Number.parseInt(pidToken, 10),
+    command,
+    csrfToken,
+    extensionServerPort: extensionServerPort ? Number.parseInt(extensionServerPort, 10) : null,
+    extensionServerCsrfToken,
+    workspaceId,
+    cloudCodeEndpoint,
+    appDataDir,
+    supportsLsp: command.includes("--enable_lsp"),
+  };
+}
+
+export function discoverInstances() {
   const output = run("ps", ["-axo", "pid=,command="]);
   const lines = output.split("\n").filter(Boolean);
 
-  return lines
-    .filter((line) => line.includes("language_server_macos_arm"))
-    .map((line) => {
-      const trimmed = line.trim();
-      const [pidToken, ...commandParts] = trimmed.split(/\s+/);
-      const command = commandParts.join(" ");
-      const csrfToken = command.match(/--csrf_token\s+(\S+)/)?.[1] ?? null;
-      const extensionServerPort = command.match(/--extension_server_port\s+(\d+)/)?.[1] ?? null;
-      const extensionServerCsrfToken =
-        command.match(/--extension_server_csrf_token\s+(\S+)/)?.[1] ?? null;
-      const workspaceId = command.match(/--workspace_id\s+(\S+)/)?.[1] ?? null;
-      const cloudCodeEndpoint = command.match(/--cloud_code_endpoint\s+(\S+)/)?.[1] ?? null;
-      const appDataDir = command.match(/--app_data_dir\s+(\S+)/)?.[1] ?? null;
-
-      return {
-        pid: Number.parseInt(pidToken, 10),
-        command,
-        csrfToken,
-        extensionServerPort: extensionServerPort ? Number.parseInt(extensionServerPort, 10) : null,
-        extensionServerCsrfToken,
-        workspaceId,
-        cloudCodeEndpoint,
-        appDataDir,
-        supportsLsp: command.includes("--enable_lsp"),
-      };
-    });
+  return lines.map(parseInstanceLine).filter(Boolean);
 }
 
-function fileUriToPath(fileUri) {
+export function fileUriToPath(fileUri) {
   if (!fileUri.startsWith("file://")) {
     return null;
   }
@@ -167,7 +172,7 @@ function fileUriToPath(fileUri) {
   }
 }
 
-function readArtifactPreview(filePath) {
+export function readArtifactPreview(filePath) {
   try {
     const extension = path.extname(filePath).toLowerCase();
     const textLikeExtensions = new Set([".md", ".txt", ".json", ".yml", ".yaml", ".ts", ".tsx", ".js", ".jsx"]);
@@ -214,7 +219,7 @@ function readArtifactPreview(filePath) {
   }
 }
 
-function listArtifacts() {
+export function listArtifacts() {
   const artifactStrings = decodeBase64Strings("antigravityUnifiedStateSync.artifactReview");
   const artifacts = [];
 
@@ -272,7 +277,7 @@ function listArtifacts() {
   });
 }
 
-function listTasksFromManagerState() {
+export function listTasksFromManagerState() {
   const stateStrings = decodeBase64Strings("jetskiStateSync.agentManagerInitState");
   const tasks = new Map();
 
@@ -294,6 +299,8 @@ function listTasksFromManagerState() {
       continue;
     }
 
+    // The manager state payload is lossy after base64 string extraction, so we keep
+    // a small set of nearby local file URIs as workspace hints for later attribution.
     if (current.startsWith("file:///") && current.includes("/Users/")) {
       for (const task of tasks.values()) {
         if (task.workspaceHints.length >= 4) {
@@ -322,7 +329,7 @@ function listTasksFromManagerState() {
   return Array.from(tasks.values());
 }
 
-function readRecentLogSignals() {
+export function readRecentLogSignals() {
   if (!fs.existsSync(LOGS_DIR)) {
     return [];
   }
@@ -356,7 +363,7 @@ function readRecentLogSignals() {
     .slice(-12);
 }
 
-function buildTaskSummaries(cwd) {
+export function buildTaskSummaries(cwd) {
   const artifacts = listArtifacts();
   const managerTasks = listTasksFromManagerState();
   const groupedArtifacts = new Map();
@@ -408,6 +415,8 @@ function buildTaskSummaries(cwd) {
         return true;
       }
 
+      // Fall back to recent artifact activity when the manager state does not expose
+      // a direct workspace hint for this trajectory.
       const latestTime = task.latestArtifact?.updatedAt
         ? new Date(task.latestArtifact.updatedAt).getTime()
         : 0;
@@ -425,7 +434,7 @@ function buildTaskSummaries(cwd) {
     });
 }
 
-function buildSnapshot(options) {
+export function buildSnapshot(options) {
   const instances = discoverInstances();
   const logSignals = readRecentLogSignals();
   const tasks = buildTaskSummaries(options.cwd);
@@ -449,7 +458,7 @@ function buildSnapshot(options) {
   };
 }
 
-function writeSnapshotFiles(outDir, snapshot) {
+export function writeSnapshotFiles(outDir, snapshot) {
   ensureDir(outDir);
   const latestPath = path.join(outDir, "latest.json");
   const eventsPath = path.join(outDir, "events.jsonl");
@@ -467,6 +476,8 @@ function writeSnapshotFiles(outDir, snapshot) {
 
   fs.writeFileSync(latestPath, serialized);
 
+  // `latest.json` is always refreshed, while `events.jsonl` only appends on change
+  // so consumers can tail discrete state transitions without duplicate churn.
   if (hash !== previousHash) {
     fs.appendFileSync(
       eventsPath,
@@ -482,7 +493,7 @@ function writeSnapshotFiles(outDir, snapshot) {
   return { latestPath, eventsPath, changed: hash !== previousHash };
 }
 
-async function watch(options) {
+export async function watch(options) {
   ensureDir(options.outDir);
   for (;;) {
     const snapshot = buildSnapshot(options);
@@ -499,15 +510,20 @@ async function watch(options) {
   }
 }
 
-function printUsage() {
+export function printUsage() {
   console.log(`Usage:
-  node scripts/antigravity-bus/index.mjs discover [--cwd <path>]
-  node scripts/antigravity-bus/index.mjs snapshot [--cwd <path>]
-  node scripts/antigravity-bus/index.mjs watch [--cwd <path>] [--interval <ms>] [--out-dir <path>]`);
+  antigravity-bus discover [--cwd <path>]
+  antigravity-bus snapshot [--cwd <path>]
+  antigravity-bus watch [--cwd <path>] [--interval <ms>] [--out-dir <path>]
+
+Examples:
+  antigravity-bus discover
+  antigravity-bus snapshot --cwd /absolute/path/to/workspace
+  antigravity-bus watch --cwd /absolute/path/to/workspace --interval 4000`);
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv);
 
   if (options.command === "discover") {
     console.log(JSON.stringify({ instances: discoverInstances() }, null, 2));
@@ -528,4 +544,6 @@ async function main() {
   process.exitCode = 1;
 }
 
-await main();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await main();
+}
