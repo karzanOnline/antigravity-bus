@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,14 @@ const STATE_DB_PATH = path.join(
 const LOGS_DIR = path.join(APP_SUPPORT_DIR, "logs");
 const DEFAULT_STORE_DIR = path.join(process.cwd(), ".cowork-temp", "antigravity-bus");
 const RECENT_TASK_WINDOW_MS = 1000 * 60 * 60 * 24 * 2;
+const TOPIC_REQUEST_TIMEOUT_MS = 1500;
+const EXTENSION_SERVER_SERVICE = "/exa.extension_server_pb.ExtensionServerService";
+const TOPICS = {
+  activeCascadeIds: "uss-activeCascadeIds",
+  trajectorySummaries: "trajectorySummaries",
+  userStatus: "uss-userStatus",
+  machineInfos: "uss-lsClientMachineInfos",
+};
 const PACKAGE_JSON = JSON.parse(
   fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
 );
@@ -77,6 +86,10 @@ export function parseArgs(argv) {
 
 export function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+export function normalizeWorkspaceId(cwd) {
+  return `file_${cwd.replace(/^\/+/, "").replaceAll(/[/.:-]/g, "_")}`;
 }
 
 export function readStateValue(key) {
@@ -171,6 +184,269 @@ export function discoverInstances() {
   const lines = output.split("\n").filter(Boolean);
 
   return lines.map(parseInstanceLine).filter(Boolean);
+}
+
+export function findWorkspaceInstance(instances, workspaceId) {
+  return (
+    instances.find((instance) => instance.workspaceId === workspaceId) ??
+    instances.find((instance) => instance.supportsLsp) ??
+    null
+  );
+}
+
+export function frameConnectJson(payload) {
+  const json = Buffer.from(JSON.stringify(payload));
+  const envelope = Buffer.alloc(5);
+  envelope[0] = 0;
+  envelope.writeUInt32BE(json.length, 1);
+  return Buffer.concat([envelope, json]);
+}
+
+export function parseConnectJsonResponse(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 5) {
+    return null;
+  }
+
+  const flag = buffer[0];
+  const size = buffer.readUInt32BE(1);
+  const body = buffer.subarray(5, 5 + size);
+  if (flag !== 0 || body.length !== size) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function decodeTopicStateEntries(topicPayload) {
+  const data = topicPayload?.initialState?.data;
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+
+  return Object.entries(data)
+    .map(([key, value]) => ({
+      key,
+      value: value?.value ?? null,
+    }))
+    .filter((entry) => typeof entry.value === "string");
+}
+
+export function decodeBase64PrintableStrings(rawValue, minLength = 8) {
+  try {
+    const decoded = Buffer.from(rawValue, "base64");
+    return extractPrintableStrings(decoded, minLength).map((item) => item.value);
+  } catch {
+    return [];
+  }
+}
+
+export function extractActiveCascadeIds(topicPayload) {
+  const ids = new Set();
+  const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
+
+  for (const entry of decodeTopicStateEntries(topicPayload)) {
+    for (const value of decodeBase64PrintableStrings(entry.value, 4)) {
+      const matches = value.match(uuidPattern) ?? [];
+      for (const match of matches) {
+        ids.add(match);
+      }
+    }
+  }
+
+  return Array.from(ids);
+}
+
+export function extractTrajectorySignals(topicPayload) {
+  const strings = [];
+  const seen = new Set();
+
+  for (const entry of decodeTopicStateEntries(topicPayload)) {
+    for (const value of decodeBase64PrintableStrings(entry.value, 12)) {
+      if (!seen.has(value)) {
+        strings.push(value);
+        seen.add(value);
+      }
+      if (strings.length >= 80) {
+        return strings;
+      }
+    }
+  }
+
+  return strings;
+}
+
+export function deriveSupervisorState({ activeCascadeIds, trajectorySignals, tasks }) {
+  const hasWaitingSignal = trajectorySignals.some((signal) =>
+    /BlockedOnUser|ShouldAutoProceed|waiting|confirm|approval|user interaction/i.test(signal)
+  );
+  if (hasWaitingSignal) {
+    return "waiting";
+  }
+
+  if (activeCascadeIds.length > 0) {
+    return "running";
+  }
+
+  if (tasks.some((task) => ["completed", "written"].includes(task.statusGuess))) {
+    return "done";
+  }
+
+  return "idle";
+}
+
+export function postJson(port, csrfToken, method, payload, timeoutMs = TOPIC_REQUEST_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify(payload);
+    const request = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: `${EXTENSION_SERVER_SERVICE}/${method}`,
+        method: "POST",
+        headers: {
+          "x-codeium-csrf-token": csrfToken,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const rawBody = Buffer.concat(chunks).toString("utf8");
+          let parsedBody = null;
+          try {
+            parsedBody = rawBody ? JSON.parse(rawBody) : null;
+          } catch {
+            parsedBody = rawBody || null;
+          }
+
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            statusCode: response.statusCode,
+            body: parsedBody,
+          });
+        });
+      }
+    );
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", () => resolve({ ok: false, statusCode: null, body: null }));
+    request.write(body);
+    request.end();
+  });
+}
+
+export function subscribeTopicInitialState(port, csrfToken, topic, timeoutMs = TOPIC_REQUEST_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const payload = frameConnectJson({ topic });
+    const request = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: `${EXTENSION_SERVER_SERVICE}/SubscribeToUnifiedStateSyncTopic`,
+        method: "POST",
+        headers: {
+          "x-codeium-csrf-token": csrfToken,
+          "content-type": "application/connect+json",
+          "content-length": payload.length,
+        },
+      },
+      (response) => {
+        const chunks = [];
+        let settled = false;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          const parsed = parseConnectJsonResponse(Buffer.concat(chunks));
+          resolve({
+            ok: response.statusCode === 200 && Boolean(parsed),
+            statusCode: response.statusCode,
+            body: parsed,
+          });
+          request.destroy();
+        };
+
+        response.on("data", (chunk) => {
+          chunks.push(chunk);
+          finish();
+        });
+        response.on("end", finish);
+        setTimeout(finish, timeoutMs);
+      }
+    );
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", () => resolve({ ok: false, statusCode: null, body: null }));
+    request.write(payload);
+    request.end();
+  });
+}
+
+export async function buildExtensionServerSnapshot(instance, tasks) {
+  if (!instance?.extensionServerPort || !instance?.extensionServerCsrfToken) {
+    return {
+      available: false,
+      healthy: false,
+      state: "idle",
+      activeCascadeIds: [],
+      topicSignals: [],
+    };
+  }
+
+  const heartbeat = await postJson(instance.extensionServerPort, instance.extensionServerCsrfToken, "Heartbeat", {});
+  const activeCascadeState = await subscribeTopicInitialState(
+    instance.extensionServerPort,
+    instance.extensionServerCsrfToken,
+    TOPICS.activeCascadeIds
+  );
+  const trajectoryState = await subscribeTopicInitialState(
+    instance.extensionServerPort,
+    instance.extensionServerCsrfToken,
+    TOPICS.trajectorySummaries
+  );
+  const userStatusState = await subscribeTopicInitialState(
+    instance.extensionServerPort,
+    instance.extensionServerCsrfToken,
+    TOPICS.userStatus
+  );
+  const machineInfoState = await subscribeTopicInitialState(
+    instance.extensionServerPort,
+    instance.extensionServerCsrfToken,
+    TOPICS.machineInfos
+  );
+
+  const activeCascadeIds = extractActiveCascadeIds(activeCascadeState.body);
+  const trajectorySignals = extractTrajectorySignals(trajectoryState.body);
+  const state = deriveSupervisorState({
+    activeCascadeIds,
+    trajectorySignals,
+    tasks,
+  });
+
+  return {
+    available: true,
+    healthy: heartbeat.ok,
+    state,
+    activeCascadeIds,
+    topicSignals: trajectorySignals.slice(0, 20),
+    rawTopics: {
+      activeCascadeIds: activeCascadeState.body,
+      trajectorySummaries: trajectoryState.body,
+      userStatus: userStatusState.body,
+      machineInfos: machineInfoState.body,
+    },
+  };
 }
 
 export function fileUriToPath(fileUri) {
@@ -447,30 +723,6 @@ export function buildTaskSummaries(cwd) {
     });
 }
 
-export function buildSnapshot(options) {
-  const instances = discoverInstances();
-  const logSignals = readRecentLogSignals();
-  const tasks = buildTaskSummaries(options.cwd);
-  const normalizedCwd = options.cwd.replace(/^\/+/, "");
-  const activeWorkspaceId = `file_${normalizedCwd.replaceAll(/[/.:-]/g, "_")}`;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    cwd: options.cwd,
-    activeWorkspaceId,
-    antigravity: {
-      appSupportDir: APP_SUPPORT_DIR,
-      stateDbPath: STATE_DB_PATH,
-      running: instances.length > 0,
-      instances,
-    },
-    userStatusAvailable: Boolean(readStateValue("antigravityUnifiedStateSync.userStatus")),
-    authStatusAvailable: Boolean(readStateValue("antigravityAuthStatus")),
-    recentLogSignals: logSignals,
-    tasks,
-  };
-}
-
 export function writeSnapshotFiles(outDir, snapshot) {
   ensureDir(outDir);
   const latestPath = path.join(outDir, "latest.json");
@@ -499,6 +751,7 @@ export function writeSnapshotFiles(outDir, snapshot) {
         hash,
         cwd: snapshot.cwd,
         taskCount: snapshot.tasks.length,
+        supervisorState: snapshot.supervisor?.state ?? null,
       })}\n`
     );
   }
@@ -509,7 +762,7 @@ export function writeSnapshotFiles(outDir, snapshot) {
 export async function watch(options) {
   ensureDir(options.outDir);
   for (;;) {
-    const snapshot = buildSnapshot(options);
+    const snapshot = await buildSnapshot(options);
     const writeResult = writeSnapshotFiles(options.outDir, snapshot);
     process.stdout.write(
       `${JSON.stringify({
@@ -538,6 +791,45 @@ Examples:
   npx antigravity-bus --help`);
 }
 
+export async function buildSnapshot(options) {
+  const baseSnapshot = buildSnapshotSync(options);
+  const extensionServer = await buildExtensionServerSnapshot(baseSnapshot.workspaceInstance, baseSnapshot.tasks);
+  return {
+    ...baseSnapshot,
+    extensionServer,
+    supervisor: {
+      state: extensionServer.state,
+      activeCascadeIds: extensionServer.activeCascadeIds,
+      healthy: extensionServer.healthy,
+    },
+  };
+}
+
+export function buildSnapshotSync(options) {
+  const instances = discoverInstances();
+  const logSignals = readRecentLogSignals();
+  const tasks = buildTaskSummaries(options.cwd);
+  const activeWorkspaceId = normalizeWorkspaceId(options.cwd);
+  const workspaceInstance = findWorkspaceInstance(instances, activeWorkspaceId);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    cwd: options.cwd,
+    activeWorkspaceId,
+    antigravity: {
+      appSupportDir: APP_SUPPORT_DIR,
+      stateDbPath: STATE_DB_PATH,
+      running: instances.length > 0,
+      instances,
+    },
+    workspaceInstance,
+    userStatusAvailable: Boolean(readStateValue("antigravityUnifiedStateSync.userStatus")),
+    authStatusAvailable: Boolean(readStateValue("antigravityAuthStatus")),
+    recentLogSignals: logSignals,
+    tasks,
+  };
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
 
@@ -557,7 +849,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (options.command === "snapshot") {
-    console.log(JSON.stringify(buildSnapshot(options), null, 2));
+    console.log(JSON.stringify(await buildSnapshot(options), null, 2));
     return;
   }
 

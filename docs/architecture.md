@@ -8,12 +8,13 @@ The project does not assume privileged integration points. Instead, it builds an
 
 ## Current Data Sources
 
-The MVP combines four sources:
+The MVP combines five sources:
 
 1. Process discovery
 2. SQLite state
 3. Artifact files
 4. Language server logs
+5. Extension-server topic subscriptions
 
 ### 1. Process Discovery
 
@@ -66,6 +67,30 @@ The CLI inspects recent `ls-main.log` lines from the latest Antigravity log dire
 
 This is intentionally narrow. The bus is trying to provide useful hints, not mirror every log line.
 
+### 5. Extension-Server Topic Subscriptions
+
+For workspace-backed instances, the CLI can now use the same local extension-server port Antigravity wires into its own app runtime.
+
+The bus extracts:
+
+- `workspace_id`
+- `extension_server_port`
+- `extension_server_csrf_token`
+
+It then calls:
+
+- unary JSON methods such as `Heartbeat`
+- `SubscribeToUnifiedStateSyncTopic` with framed `application/connect+json` payloads
+
+The current topic set is intentionally small and supervisor-oriented:
+
+- `uss-activeCascadeIds`
+- `trajectorySummaries`
+- `uss-userStatus`
+- `uss-lsClientMachineInfos`
+
+This gives the bus a direct signal for whether a workspace currently has an active cascade, without depending on UI scraping.
+
 ## Snapshot Flow
 
 Each `snapshot` call follows this rough sequence:
@@ -73,8 +98,9 @@ Each `snapshot` call follows this rough sequence:
 1. Discover running instances
 2. Read selected SQLite state keys
 3. Decode artifact references
-4. Build task summaries for the requested workspace
-5. Normalize the result into one JSON payload
+4. Probe the workspace extension server when available
+5. Build task summaries for the requested workspace
+6. Normalize the result into one JSON payload
 
 `watch` repeats that flow on an interval and persists two files:
 
@@ -109,8 +135,10 @@ The local-first design has a few benefits:
 
 It also keeps the project useful even before any official API or RPC integration is available.
 
+The new extension-server observer still follows that principle: it is local-only, workspace-scoped, and built around ephemeral ports and CSRF tokens that already exist on the machine.
+
 ## Planned Evolution
 
-The likely next layer is richer runtime connectivity through Connect-RPC or other Antigravity-exposed local interfaces.
+The likely next layer is broader runtime connectivity through more Connect-RPC methods and a stronger mapping from topic payloads to normalized supervisor states.
 
 That future layer should sit on top of the current snapshot model, not replace it. The local snapshot is the stable substrate that downstream tools can already depend on.

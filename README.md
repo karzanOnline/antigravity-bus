@@ -13,7 +13,7 @@ This project is not an official Antigravity integration. It is an independent de
 - Current stage: early MVP
 - Supported platform: macOS
 - Runtime: Node.js 20+
-- Integration style: local inspection only, no remote control yet
+- Integration style: local inspection and extension-server observation, no remote control yet
 
 The current release focuses on one narrow promise: if Antigravity is running on your machine, `antigravity-bus` should help you discover it, inspect its local footprint, and persist a stable snapshot that another tool can consume.
 
@@ -38,6 +38,9 @@ If you want a real delegation loop, you need to answer questions like:
 - Reads Antigravity local state from the SQLite store under `~/Library/Application Support/Antigravity`
 - Decodes artifact and manager state blobs into conservative, review-friendly summaries
 - Produces snapshot JSON for a target workspace
+- Probes the local extension server with the same CSRF-guarded interfaces Antigravity uses internally
+- Subscribes to unified-state topics such as active cascades and trajectory summaries
+- Normalizes a lightweight supervisor state such as `idle`, `running`, `waiting`, or `done`
 - Writes append-only change events for downstream review loops and supervisor processes
 
 ## Non-Goals
@@ -54,12 +57,13 @@ Keeping the scope narrow is deliberate. The project should become trustworthy as
 
 ## Architecture
 
-The CLI currently builds snapshots from four local sources:
+The CLI currently builds snapshots from five local sources:
 
 1. Running processes
 2. Antigravity SQLite state
 3. Local artifact files
 4. Recent language server logs
+5. Extension-server topic subscriptions
 
 Those sources are merged into a normalized snapshot with stable top-level fields such as:
 
@@ -67,6 +71,9 @@ Those sources are merged into a normalized snapshot with stable top-level fields
 - `cwd`
 - `activeWorkspaceId`
 - `antigravity`
+- `workspaceInstance`
+- `extensionServer`
+- `supervisor`
 - `userStatusAvailable`
 - `authStatusAvailable`
 - `recentLogSignals`
@@ -159,7 +166,7 @@ Returns a JSON object with an `instances` array.
 
 ### `snapshot`
 
-Builds one workspace-scoped snapshot by combining process discovery, local state, artifacts, and logs.
+Builds one workspace-scoped snapshot by combining process discovery, local state, artifacts, logs, and extension-server topic state.
 
 Options:
 
@@ -205,6 +212,19 @@ node ./src/index.mjs watch \
     "running": true,
     "instances": []
   },
+  "workspaceInstance": null,
+  "extensionServer": {
+    "available": false,
+    "healthy": false,
+    "state": "idle",
+    "activeCascadeIds": [],
+    "topicSignals": []
+  },
+  "supervisor": {
+    "state": "idle",
+    "activeCascadeIds": [],
+    "healthy": false
+  },
   "userStatusAvailable": true,
   "authStatusAvailable": true,
   "recentLogSignals": [],
@@ -229,6 +249,7 @@ The MVP reads only local machine state:
 - Antigravity state from `~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb`
 - local artifact files referenced by decoded state
 - recent lines from the Antigravity language server logs
+- extension-server topic snapshots fetched from the workspace-scoped local port
 
 That local-first design is intentional. It keeps the bus understandable and auditable while the project is still stabilizing.
 

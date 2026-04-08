@@ -7,9 +7,13 @@ import { spawnSync } from "node:child_process";
 
 import {
   PACKAGE_VERSION,
+  deriveSupervisorState,
   extractPrintableStrings,
+  extractActiveCascadeIds,
+  frameConnectJson,
   main,
   parseArgs,
+  parseConnectJsonResponse,
   parseInstanceLine,
   readArtifactPreview,
   writeSnapshotFiles,
@@ -70,6 +74,73 @@ test("extractPrintableStrings keeps long printable runs only", () => {
   ]);
 });
 
+test("parseConnectJsonResponse decodes framed JSON payloads", () => {
+  const framed = frameConnectJson({
+    initialState: {
+      data: {
+        "1": {
+          value: "GiQyNTMyZGNjYi1mZjJiLTQzOWYtOGZhYS02ZTJlYWZmOTI4Nzg=",
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(parseConnectJsonResponse(framed), {
+    initialState: {
+      data: {
+        "1": {
+          value: "GiQyNTMyZGNjYi1mZjJiLTQzOWYtOGZhYS02ZTJlYWZmOTI4Nzg=",
+        },
+      },
+    },
+  });
+});
+
+test("extractActiveCascadeIds finds UUIDs inside protobuf-backed topic payloads", () => {
+  const topicPayload = {
+    initialState: {
+      data: {
+        "1": {
+          value: "GiQyNTMyZGNjYi1mZjJiLTQzOWYtOGZhYS02ZTJlYWZmOTI4Nzg=",
+        },
+      },
+    },
+  };
+
+  assert.deepEqual(extractActiveCascadeIds(topicPayload), [
+    "2532dccb-ff2b-439f-8faa-6e2eaff92878",
+  ]);
+});
+
+test("deriveSupervisorState prefers waiting signals over active execution", () => {
+  assert.equal(
+    deriveSupervisorState({
+      activeCascadeIds: ["2532dccb-ff2b-439f-8faa-6e2eaff92878"],
+      trajectorySignals: ["BlockedOnUser", "ShouldAutoProceed"],
+      tasks: [],
+    }),
+    "waiting"
+  );
+
+  assert.equal(
+    deriveSupervisorState({
+      activeCascadeIds: ["2532dccb-ff2b-439f-8faa-6e2eaff92878"],
+      trajectorySignals: [],
+      tasks: [],
+    }),
+    "running"
+  );
+
+  assert.equal(
+    deriveSupervisorState({
+      activeCascadeIds: [],
+      trajectorySignals: [],
+      tasks: [{ statusGuess: "completed" }],
+    }),
+    "done"
+  );
+});
+
 test("readArtifactPreview infers checklist progress from markdown artifacts", async () => {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-preview-"));
   const filePath = path.join(tempDir, "task.md");
@@ -95,6 +166,9 @@ test("writeSnapshotFiles writes latest output and appends events only when paylo
     cwd: "/tmp/workspace",
     activeWorkspaceId: "file_tmp_workspace",
     antigravity: { running: true, instances: [] },
+    workspaceInstance: null,
+    extensionServer: { available: false, healthy: false, state: "idle", activeCascadeIds: [], topicSignals: [] },
+    supervisor: { state: "idle", activeCascadeIds: [], healthy: false },
     userStatusAvailable: true,
     authStatusAvailable: true,
     recentLogSignals: [],
@@ -119,8 +193,14 @@ test("writeSnapshotFiles writes latest output and appends events only when paylo
   assert.equal(latest.tasks.length, 1);
   assert.equal(events.length, 2);
   assert.deepEqual(
-    events.map((entry) => entry.taskCount),
-    [0, 1]
+    events.map((entry) => ({
+      taskCount: entry.taskCount,
+      supervisorState: entry.supervisorState,
+    })),
+    [
+      { taskCount: 0, supervisorState: "idle" },
+      { taskCount: 1, supervisorState: "idle" },
+    ]
   );
 });
 
