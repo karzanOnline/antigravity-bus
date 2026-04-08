@@ -97,24 +97,37 @@ cd antigravity-bus
 
 The current MVP has no npm runtime dependencies.
 
+### Install as a CLI
+
+After the package is published on npm, you can run it either globally or through `npx`:
+
+```bash
+npm install -g antigravity-bus
+antigravity-bus --help
+```
+
+```bash
+npx antigravity-bus --help
+```
+
 ## Quick Start
 
 ### Discover active Antigravity instances
 
 ```bash
-node ./src/index.mjs discover
+antigravity-bus discover
 ```
 
 ### Build a snapshot for one workspace
 
 ```bash
-node ./src/index.mjs snapshot --cwd /absolute/path/to/workspace
+antigravity-bus snapshot --cwd /absolute/path/to/workspace
 ```
 
 ### Watch for changes and persist them
 
 ```bash
-node ./src/index.mjs watch \
+antigravity-bus watch \
   --cwd /absolute/path/to/workspace \
   --interval 4000 \
   --out-dir /absolute/path/to/output
@@ -127,6 +140,8 @@ npm run discover
 npm run snapshot -- --cwd /absolute/path/to/workspace
 npm run watch -- --cwd /absolute/path/to/workspace
 ```
+
+If you are running directly from source without a global install, replace `antigravity-bus` with `node ./src/index.mjs`.
 
 ## CLI Reference
 
@@ -264,6 +279,8 @@ node ./src/index.mjs snapshot --cwd /absolute/path/to/workspace
 Contribution guidelines live in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 The release process lives in [docs/release-checklist.md](./docs/release-checklist.md).
+
+The npm publish flow lives in [docs/npm-publish.md](./docs/npm-publish.md).
 
 ## Roadmap
 

@@ -21,6 +21,12 @@ const STATE_DB_PATH = path.join(
 const LOGS_DIR = path.join(APP_SUPPORT_DIR, "logs");
 const DEFAULT_STORE_DIR = path.join(process.cwd(), ".cowork-temp", "antigravity-bus");
 const RECENT_TASK_WINDOW_MS = 1000 * 60 * 60 * 24 * 2;
+const PACKAGE_JSON = JSON.parse(
+  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
+
+export const PACKAGE_NAME = PACKAGE_JSON.name;
+export const PACKAGE_VERSION = PACKAGE_JSON.version;
 
 export function run(command, args, options = {}) {
   try {
@@ -35,7 +41,13 @@ export function run(command, args, options = {}) {
 }
 
 export function parseArgs(argv) {
-  const [command = "snapshot", ...rest] = argv;
+  const [rawCommand = "snapshot", ...rest] = argv;
+  const command =
+    rawCommand === "-h" || rawCommand === "--help"
+      ? "help"
+      : rawCommand === "-v" || rawCommand === "--version"
+        ? "version"
+        : rawCommand;
   const options = {
     command,
     cwd: process.cwd(),
@@ -515,15 +527,28 @@ export function printUsage() {
   antigravity-bus discover [--cwd <path>]
   antigravity-bus snapshot [--cwd <path>]
   antigravity-bus watch [--cwd <path>] [--interval <ms>] [--out-dir <path>]
+  antigravity-bus --help
+  antigravity-bus --version
 
 Examples:
   antigravity-bus discover
   antigravity-bus snapshot --cwd /absolute/path/to/workspace
-  antigravity-bus watch --cwd /absolute/path/to/workspace --interval 4000`);
+  antigravity-bus watch --cwd /absolute/path/to/workspace --interval 4000
+  npx antigravity-bus --help`);
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
+
+  if (options.command === "help") {
+    printUsage();
+    return;
+  }
+
+  if (options.command === "version") {
+    console.log(PACKAGE_VERSION);
+    return;
+  }
 
   if (options.command === "discover") {
     console.log(JSON.stringify({ instances: discoverInstances() }, null, 2));

@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  PACKAGE_VERSION,
   extractPrintableStrings,
+  main,
   parseArgs,
   parseInstanceLine,
   readArtifactPreview,
@@ -27,6 +29,13 @@ test("parseArgs reads command and option flags", () => {
   assert.equal(options.intervalMs, 2500);
   assert.equal(options.cwd, path.resolve("examples"));
   assert.equal(options.outDir, path.resolve("tmp/out"));
+});
+
+test("parseArgs normalizes help and version flags", () => {
+  assert.equal(parseArgs(["--help"]).command, "help");
+  assert.equal(parseArgs(["-h"]).command, "help");
+  assert.equal(parseArgs(["--version"]).command, "version");
+  assert.equal(parseArgs(["-v"]).command, "version");
 });
 
 test("parseInstanceLine extracts Antigravity language server metadata", () => {
@@ -112,4 +121,21 @@ test("writeSnapshotFiles writes latest output and appends events only when paylo
     events.map((entry) => entry.taskCount),
     [0, 1]
   );
+});
+
+test("main prints the package version for version requests", async () => {
+  const originalLog = console.log;
+  const lines = [];
+
+  console.log = (...args) => {
+    lines.push(args.join(" "));
+  };
+
+  try {
+    await main(["--version"]);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(lines, [PACKAGE_VERSION]);
 });
