@@ -263,6 +263,8 @@ node ./src/index.mjs snapshot --cwd /absolute/path/to/workspace
 
 Contribution guidelines live in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+The release process lives in [docs/release-checklist.md](./docs/release-checklist.md).
+
 ## Roadmap
 
 - Add richer state decoding for trajectory and artifact metadata
