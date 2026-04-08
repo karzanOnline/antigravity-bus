@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose an improvement or new capability for antigravity-bus
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What workflow is blocked or painful today?
+      placeholder: Describe the problem before describing the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the project do?
+      placeholder: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and boundaries
+      description: Mention any tradeoffs, non-goals, or assumptions.
+      placeholder: Note whether this is local-only, macOS-only, read-only, and so on.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Describe any workarounds or rejected approaches.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Link examples, prior art, or local observations if helpful.
