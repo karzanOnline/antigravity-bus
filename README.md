@@ -1,5 +1,7 @@
 # antigravity-bus
 
+[![CI](https://github.com/karzanOnline/antigravity-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/karzanOnline/antigravity-bus/actions/workflows/ci.yml)
+
 `antigravity-bus` is a local-first observability bus for Antigravity.
 
 It is built for a very specific but increasingly common workflow: one agent delegates implementation work to Antigravity, then needs a reliable way to observe runtime state, collect artifacts, and close the loop with review or orchestration logic.
