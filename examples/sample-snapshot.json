@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-04-08T13:17:41.726Z",
+  "cwd": "/Users/example/workspace",
+  "activeWorkspaceId": "file_Users_example_workspace",
+  "antigravity": {
+    "running": true,
+    "instances": [
+      {
+        "pid": 1099,
+        "workspaceId": "file_Users_example_workspace",
+        "extensionServerPort": 49514,
+        "supportsLsp": true
+      }
+    ]
+  },
+  "userStatusAvailable": true,
+  "authStatusAvailable": true,
+  "recentLogSignals": [],
+  "tasks": []
+}

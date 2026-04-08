@@ -1,0 +1,24 @@
+{
+  "name": "antigravity-bus",
+  "version": "0.1.0",
+  "description": "A local event and state bus for Antigravity: discover language server instances, observe workspaces, and collect artifact snapshots.",
+  "type": "module",
+  "private": false,
+  "bin": {
+    "antigravity-bus": "./src/index.mjs"
+  },
+  "scripts": {
+    "discover": "node ./src/index.mjs discover",
+    "snapshot": "node ./src/index.mjs snapshot",
+    "watch": "node ./src/index.mjs watch"
+  },
+  "keywords": [
+    "antigravity",
+    "agent",
+    "bus",
+    "supervisor",
+    "observability",
+    "local-first"
+  ],
+  "license": "MIT"
+}
