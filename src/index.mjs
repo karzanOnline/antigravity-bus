@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const APP_SUPPORT_DIR = path.join(
@@ -569,6 +570,9 @@ export async function main(argv = process.argv.slice(2)) {
   process.exitCode = 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const currentModulePath = fileURLToPath(import.meta.url);
+const entryPath = process.argv[1] ? fs.realpathSync.native(process.argv[1]) : null;
+
+if (entryPath === currentModulePath) {
   await main();
 }

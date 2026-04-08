@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import {
   PACKAGE_VERSION,
@@ -138,4 +139,20 @@ test("main prints the package version for version requests", async () => {
   }
 
   assert.deepEqual(lines, [PACKAGE_VERSION]);
+});
+
+test("cli entrypoint works when invoked through a symlinked binary path", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-bin-"));
+  const symlinkPath = path.join(tempDir, "antigravity-bus");
+  await fs.promises.symlink(
+    path.resolve("/Users/caozheng/cowork-flie/antigravity-bus/src/index.mjs"),
+    symlinkPath
+  );
+
+  const result = spawnSync(process.execPath, [symlinkPath, "--version"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), PACKAGE_VERSION);
 });
