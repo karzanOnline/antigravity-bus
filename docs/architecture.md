@@ -91,6 +91,11 @@ The current topic set is intentionally small and supervisor-oriented:
 
 This gives the bus a direct signal for whether a workspace currently has an active cascade, without depending on UI scraping.
 
+That runtime signal is only half of the supervisor story. The bus also runs acceptance checks against workspace files so it can distinguish:
+
+- "the agent is still running"
+- "the latest visible delivery is already incomplete"
+
 ## Snapshot Flow
 
 Each `snapshot` call follows this rough sequence:
@@ -100,7 +105,8 @@ Each `snapshot` call follows this rough sequence:
 3. Decode artifact references
 4. Probe the workspace extension server when available
 5. Build task summaries for the requested workspace
-6. Normalize the result into one JSON payload
+6. Run acceptance checks against the current workspace tree
+7. Normalize the result into one JSON payload
 
 `watch` repeats that flow on an interval and persists two files:
 
@@ -110,6 +116,11 @@ Each `snapshot` call follows this rough sequence:
 `latest.json` is the newest full snapshot.
 
 `events.jsonl` is a lightweight append-only stream that records change events only when the full normalized payload differs from the previous cycle.
+
+Each event includes both `supervisorState` and `acceptanceState`. Downstream tools should treat them as separate dimensions:
+
+- `supervisorState` answers whether Antigravity appears active, waiting, done, or idle
+- `acceptanceState` answers whether the visible code changes satisfy a known closure rule
 
 ## Attribution Strategy
 

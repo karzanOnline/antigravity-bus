@@ -6,16 +6,28 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import {
+  buildDispatchArgs,
+  createBridgeRequestPayload,
+  deriveDispatchVerification,
+  buildRemediationPrompt,
+  decodeIpcParts,
+  encodeIpcParts,
   PACKAGE_VERSION,
   deriveSupervisorState,
+  evaluateAcceptanceChecks,
   extractPrintableStrings,
   extractActiveCascadeIds,
+  findMainIpcHandle,
+  frameIpcMessage,
   frameConnectJson,
+  getBridgePaths,
   main,
   parseArgs,
   parseConnectJsonResponse,
   parseInstanceLine,
   readArtifactPreview,
+  waitForBridgeResponse,
+  writeBridgeRequest,
   writeSnapshotFiles,
 } from "../src/index.mjs";
 
@@ -34,6 +46,157 @@ test("parseArgs reads command and option flags", () => {
   assert.equal(options.intervalMs, 2500);
   assert.equal(options.cwd, path.resolve("examples"));
   assert.equal(options.outDir, path.resolve("tmp/out"));
+});
+
+test("buildDispatchArgs shapes launch.start payload for workspace chat dispatch", () => {
+  const args = buildDispatchArgs({
+    cwd: "/Users/demo/skin-saas",
+    prompt: "做到哪里",
+    mode: "agent",
+    profile: "agbus-demo",
+    addFiles: ["/Users/demo/skin-saas/README.md"],
+  });
+
+  assert.deepEqual(args, {
+    _: ["/Users/demo/skin-saas"],
+    "reuse-window": true,
+    profile: "agbus-demo",
+    chat: {
+      _: ["做到哪里"],
+      "reuse-window": true,
+      mode: "agent",
+      profile: "agbus-demo",
+      "add-file": ["/Users/demo/skin-saas/README.md"],
+    },
+  });
+});
+
+test("parseArgs enables strict cascade verification when requested", () => {
+  const options = parseArgs(["dispatch", "--cwd", "examples", "--prompt", "ping", "--wait-for-new-cascade"]);
+
+  assert.equal(options.command, "dispatch");
+  assert.equal(options.waitForNewCascade, true);
+});
+
+test("parseArgs reads bridge-dispatch options", () => {
+  const options = parseArgs([
+    "bridge-dispatch",
+    "--cwd",
+    "examples",
+    "--prompt",
+    "ping",
+    "--bridge-dir",
+    "/tmp/ag-bridge",
+  ]);
+
+  assert.equal(options.command, "bridge-dispatch");
+  assert.equal(options.bridgeDir, "/tmp/ag-bridge");
+  assert.equal(options.prompt, "ping");
+});
+
+test("deriveDispatchVerification distinguishes confirmed and unconfirmed dispatches", () => {
+  assert.deepEqual(
+    deriveDispatchVerification({
+      waitForNewCascade: true,
+      workspaceReady: true,
+      sidebarIncludesWorkspace: true,
+      changedTrajectories: [],
+      newCascadeIds: ["new-cascade-id"],
+    }),
+    {
+      state: "confirmed_new_cascade",
+      targetHit: true,
+      reasons: ["Observed new active cascade IDs after dispatch."],
+    }
+  );
+
+  assert.deepEqual(
+    deriveDispatchVerification({
+      waitForNewCascade: true,
+      workspaceReady: true,
+      sidebarIncludesWorkspace: true,
+      changedTrajectories: [],
+      newCascadeIds: [],
+    }),
+    {
+      state: "delivered_but_unconfirmed",
+      targetHit: false,
+      reasons: ["No new active cascade IDs were observed before the dispatch timeout expired."],
+    }
+  );
+});
+
+test("createBridgeRequestPayload captures prompt dispatch metadata", () => {
+  const payload = createBridgeRequestPayload({
+    cwd: "/Users/demo/repo",
+    prompt: "hello bridge",
+    mode: "agent",
+    addFiles: ["/Users/demo/repo/README.md"],
+    profile: "demo-profile",
+  });
+
+  assert.match(payload.id, /^bridge-/);
+  assert.equal(payload.cwd, "/Users/demo/repo");
+  assert.equal(payload.prompt, "hello bridge");
+  assert.equal(payload.commandCandidates[0], "antigravity.sendPromptToAgentPanel");
+});
+
+test("writeBridgeRequest creates inbox file and waitForBridgeResponse reads outbox response", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-bridge-"));
+  const payload = {
+    id: "bridge-test-1",
+    cwd: "/Users/demo/repo",
+    prompt: "ping",
+  };
+
+  const writeResult = writeBridgeRequest(tempDir, payload);
+  const paths = getBridgePaths(tempDir);
+  const requestContent = JSON.parse(await fs.promises.readFile(writeResult.filePath, "utf8"));
+
+  assert.deepEqual(requestContent, payload);
+  assert.equal(writeResult.inboxDir, paths.inboxDir);
+
+  const responseBody = { id: payload.id, ok: true, commandUsed: "antigravity.sendPromptToAgentPanel" };
+  await fs.promises.writeFile(path.join(paths.outboxDir, `${payload.id}.json`), JSON.stringify(responseBody), "utf8");
+
+  const waited = await waitForBridgeResponse(tempDir, payload.id, 1000);
+  assert.deepEqual(waited.response, responseBody);
+});
+
+test("encodeIpcParts round-trips channel payloads", () => {
+  const encoded = encodeIpcParts([100, 7, "launch", "start"], [
+    { _: ["/Users/demo/skin-saas"], chat: { _: ["做到哪里"] } },
+    { PATH: "/usr/bin" },
+  ]);
+
+  assert.deepEqual(decodeIpcParts(encoded), {
+    first: [100, 7, "launch", "start"],
+    second: [
+      { _: ["/Users/demo/skin-saas"], chat: { _: ["做到哪里"] } },
+      { PATH: "/usr/bin" },
+    ],
+  });
+});
+
+test("frameIpcMessage writes the expected 13-byte IPC envelope", () => {
+  const payload = Buffer.from("hello");
+  const framed = frameIpcMessage(payload, 1, 11, 3);
+
+  assert.equal(framed.readUInt8(0), 1);
+  assert.equal(framed.readUInt32BE(1), 11);
+  assert.equal(framed.readUInt32BE(5), 3);
+  assert.equal(framed.readUInt32BE(9), 5);
+  assert.equal(framed.slice(13).toString("utf8"), "hello");
+});
+
+test("findMainIpcHandle returns the latest main socket when present", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-ipc-"));
+  const first = path.join(tempDir, "1.09-main.sock");
+  const second = path.join(tempDir, "1.10-main.sock");
+  await fs.promises.writeFile(first, "");
+  await fs.promises.writeFile(second, "");
+
+  assert.equal(findMainIpcHandle(tempDir), second);
 });
 
 test("parseArgs normalizes help and version flags", () => {
@@ -141,6 +304,173 @@ test("deriveSupervisorState prefers waiting signals over active execution", () =
   );
 });
 
+test("evaluateAcceptanceChecks fails when skin-saas only ships status UI without a backend chain", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-acceptance-fail-"));
+  const detailDir = path.join(tempDir, "apps", "admin", "src", "app", "appointments", "[id]");
+  const apiDir = path.join(tempDir, "apps", "api", "src", "appointments");
+
+  await fs.promises.mkdir(detailDir, { recursive: true });
+  await fs.promises.mkdir(apiDir, { recursive: true });
+
+  await fs.promises.writeFile(
+    path.join(detailDir, "page.tsx"),
+    `
+      export default function AppointmentDetailPage() {
+        const label = "更新状态";
+        return <button>{label}</button>;
+      }
+    `,
+    "utf8"
+  );
+  await fs.promises.writeFile(
+    path.join(apiDir, "appointments.controller.ts"),
+    `
+      @Get(":appointmentId")
+      getOne() {}
+    `,
+    "utf8"
+  );
+  await fs.promises.writeFile(
+    path.join(apiDir, "appointments.service.ts"),
+    `
+      export class AppointmentsService {
+        getOne() {}
+      }
+    `,
+    "utf8"
+  );
+
+  const acceptance = evaluateAcceptanceChecks(tempDir, [
+    {
+      trajectoryId: "t-1",
+      statusGuess: "written",
+    },
+  ]);
+
+  assert.equal(acceptance.state, "failed");
+  assert.equal(acceptance.failedChecks.length, 1);
+  assert.match(acceptance.failedChecks[0].reasons.join(" "), /status-update route/i);
+});
+
+test("evaluateAcceptanceChecks passes when skin-saas wires frontend and backend status updates", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-acceptance-pass-"));
+  const detailDir = path.join(tempDir, "apps", "admin", "src", "app", "appointments", "[id]");
+  const apiDir = path.join(tempDir, "apps", "api", "src", "appointments");
+
+  await fs.promises.mkdir(detailDir, { recursive: true });
+  await fs.promises.mkdir(apiDir, { recursive: true });
+
+  await fs.promises.writeFile(
+    path.join(detailDir, "page.tsx"),
+    `
+      export default function AppointmentDetailPage() {
+        async function handleUpdateStatus() {
+          await fetch("/api/appointments/1/status", { method: "PATCH" });
+        }
+        return <button onClick={handleUpdateStatus}>更新状态</button>;
+      }
+    `,
+    "utf8"
+  );
+  await fs.promises.writeFile(
+    path.join(apiDir, "appointments.controller.ts"),
+    `
+      @Patch(":appointmentId/status")
+      updateStatus() {}
+    `,
+    "utf8"
+  );
+  await fs.promises.writeFile(
+    path.join(apiDir, "appointments.service.ts"),
+    `
+      export class AppointmentsService {
+        updateStatus() {
+          return {};
+        }
+      }
+    `,
+    "utf8"
+  );
+
+  const acceptance = evaluateAcceptanceChecks(tempDir, [
+    {
+      trajectoryId: "t-2",
+      statusGuess: "written",
+    },
+  ]);
+
+  assert.equal(acceptance.state, "passed");
+  assert.equal(acceptance.failedChecks.length, 0);
+});
+
+test("evaluateAcceptanceChecks can fail from dirty relevant files even when manager tasks are empty", async () => {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-acceptance-dirty-"));
+  const detailDir = path.join(tempDir, "apps", "admin", "src", "app", "appointments", "[id]");
+  const apiDir = path.join(tempDir, "apps", "api", "src", "appointments");
+
+  await fs.promises.mkdir(detailDir, { recursive: true });
+  await fs.promises.mkdir(apiDir, { recursive: true });
+
+  await fs.promises.writeFile(
+    path.join(detailDir, "page.tsx"),
+    `
+      export default function AppointmentDetailPage() {
+        const label = "更新状态";
+        return <button>{label}</button>;
+      }
+    `,
+    "utf8"
+  );
+  await fs.promises.writeFile(path.join(apiDir, "appointments.controller.ts"), "export class C {}", "utf8");
+  await fs.promises.writeFile(path.join(apiDir, "appointments.service.ts"), "export class S {}", "utf8");
+
+  spawnSync("git", ["init"], { cwd: tempDir, encoding: "utf8" });
+  spawnSync("git", ["config", "user.name", "Codex Test"], { cwd: tempDir, encoding: "utf8" });
+  spawnSync("git", ["config", "user.email", "codex@example.com"], { cwd: tempDir, encoding: "utf8" });
+  spawnSync("git", ["add", "."], { cwd: tempDir, encoding: "utf8" });
+  spawnSync("git", ["commit", "-m", "init"], { cwd: tempDir, encoding: "utf8" });
+
+  await fs.promises.writeFile(
+    path.join(detailDir, "page.tsx"),
+    `
+      export default function AppointmentDetailPage() {
+        return <button>更新状态</button>;
+      }
+    `,
+    "utf8"
+  );
+
+  const acceptance = evaluateAcceptanceChecks(tempDir, []);
+
+  assert.equal(acceptance.state, "failed");
+  assert.equal(acceptance.taskOutputDetected, false);
+  assert.equal(acceptance.dirtyRelevantFiles.length, 1);
+  assert.match(acceptance.dirtyRelevantFiles[0], /\[id\]\/page\.tsx$/);
+});
+
+test("buildRemediationPrompt turns failed acceptance into a hard corrective prompt", () => {
+  const prompt = buildRemediationPrompt({
+    cwd: "/Users/demo/skin-saas",
+    supervisor: {
+      acceptance: {
+        state: "failed",
+        dirtyRelevantFiles: ["/Users/demo/skin-saas/apps/admin/src/app/appointments/[id]/page.tsx"],
+        failedChecks: [
+          {
+            label: "Skin SaaS appointment status update chain",
+            reasons: ["Appointments controller does not expose a status-update route."],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.match(prompt, /does not pass supervisor acceptance/i);
+  assert.match(prompt, /Appointments controller does not expose a status-update route/i);
+  assert.match(prompt, /Do not stop at UI changes/i);
+  assert.match(prompt, /When finished, summarize the exact files you changed/i);
+});
+
 test("readArtifactPreview infers checklist progress from markdown artifacts", async () => {
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "antigravity-bus-preview-"));
   const filePath = path.join(tempDir, "task.md");
@@ -168,7 +498,12 @@ test("writeSnapshotFiles writes latest output and appends events only when paylo
     antigravity: { running: true, instances: [] },
     workspaceInstance: null,
     extensionServer: { available: false, healthy: false, state: "idle", activeCascadeIds: [], topicSignals: [] },
-    supervisor: { state: "idle", activeCascadeIds: [], healthy: false },
+    supervisor: {
+      state: "idle",
+      activeCascadeIds: [],
+      healthy: false,
+      acceptance: { state: "unknown", failedChecks: [] },
+    },
     userStatusAvailable: true,
     authStatusAvailable: true,
     recentLogSignals: [],
@@ -196,10 +531,11 @@ test("writeSnapshotFiles writes latest output and appends events only when paylo
     events.map((entry) => ({
       taskCount: entry.taskCount,
       supervisorState: entry.supervisorState,
+      acceptanceState: entry.acceptanceState,
     })),
     [
-      { taskCount: 0, supervisorState: "idle" },
-      { taskCount: 1, supervisorState: "idle" },
+      { taskCount: 0, supervisorState: "idle", acceptanceState: "unknown" },
+      { taskCount: 1, supervisorState: "idle", acceptanceState: "unknown" },
     ]
   );
 });

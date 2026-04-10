@@ -13,7 +13,7 @@ This project is not an official Antigravity integration. It is an independent de
 - Current stage: early MVP
 - Supported platform: macOS
 - Runtime: Node.js 20+
-- Integration style: local inspection and extension-server observation, no remote control yet
+- Integration style: local inspection, extension-server observation, and local main-process chat dispatch
 
 The current release focuses on one narrow promise: if Antigravity is running on your machine, `antigravity-bus` should help you discover it, inspect its local footprint, and persist a stable snapshot that another tool can consume.
 
@@ -41,7 +41,9 @@ If you want a real delegation loop, you need to answer questions like:
 - Probes the local extension server with the same CSRF-guarded interfaces Antigravity uses internally
 - Subscribes to unified-state topics such as active cascades and trajectory summaries
 - Normalizes a lightweight supervisor state such as `idle`, `running`, `waiting`, or `done`
+- Evaluates workspace-specific acceptance checks so supervisor loops can fail incomplete deliveries
 - Writes append-only change events for downstream review loops and supervisor processes
+- Dispatches prompts through Antigravity's local `*-main.sock` handle using the same `launch.start(...)` entry point as the official CLI
 
 ## Non-Goals
 
@@ -78,6 +80,13 @@ Those sources are merged into a normalized snapshot with stable top-level fields
 - `authStatusAvailable`
 - `recentLogSignals`
 - `tasks`
+
+The snapshot intentionally separates:
+
+- runtime state, under `supervisor.state`
+- delivery closure, under `supervisor.acceptance.state`
+
+That distinction matters when an agent is still marked as `running` but has already produced an incomplete change. For example, a detail page might render a status-update button while the backend route is still missing. In that case the runtime can remain active, while acceptance already reports `failed`.
 
 For a deeper breakdown of the internal model, see [docs/architecture.md](./docs/architecture.md).
 
@@ -140,12 +149,22 @@ antigravity-bus watch \
   --out-dir /absolute/path/to/output
 ```
 
+### Dispatch a prompt into Antigravity chat
+
+```bash
+antigravity-bus dispatch \
+  --cwd /absolute/path/to/workspace \
+  --prompt "做到哪里" \
+  --wait-ms 5000
+```
+
 You can also use the npm scripts:
 
 ```bash
 npm run discover
 npm run snapshot -- --cwd /absolute/path/to/workspace
 npm run watch -- --cwd /absolute/path/to/workspace
+npm run dispatch -- --cwd /absolute/path/to/workspace --prompt "做到哪里"
 ```
 
 If you are running directly from source without a global install, replace `antigravity-bus` with `node ./src/index.mjs`.
@@ -197,6 +216,80 @@ node ./src/index.mjs watch \
   --out-dir /tmp/antigravity-bus
 ```
 
+### `dispatch`
+
+Queues a request for the companion Antigravity extension bridge. This is now the default dispatch path because it runs inside the Antigravity extension host and returns an explicit command-execution receipt.
+
+Options:
+
+- `--cwd <path>`: workspace path to target
+- `--prompt <text>`: prompt text to send into chat
+- `--mode <mode>`: chat mode, default `agent`
+- `--add-file <path>`: attach one or more files to the chat request
+- `--wait-ms <ms>`: how long to wait for a bridge response file
+- `--bridge-dir <path>`: override the local queue directory, default `~/Library/Application Support/Antigravity/antigravity-bus-bridge`
+
+Example:
+
+```bash
+node ./src/index.mjs dispatch \
+  --cwd /Users/example/project \
+  --prompt "做到哪里" \
+  --wait-ms 5000
+```
+
+### `ipc-dispatch`
+
+Uses the older main-process socket path and calls `launch.start(...)`. Keep this around for reverse-engineering and fallback testing, but it is no longer the default because it does not guarantee runtime chat delivery.
+
+Options:
+
+- `--cwd <path>`: workspace path to target
+- `--prompt <text>`: prompt text to send into chat
+- `--mode <mode>`: chat mode, default `agent`
+- `--profile <name>`: optional Antigravity profile
+- `--add-file <path>`: attach one or more files to the chat request
+- `--wait-ms <ms>`: how long to wait for workspace or brain-activity signals after dispatch
+- `--wait-for-new-cascade`: require a newly observed active cascade before marking the dispatch as confirmed
+
+Example:
+
+```bash
+node ./src/index.mjs ipc-dispatch \
+  --cwd /Users/example/project \
+  --prompt "Continue the task" \
+  --wait-for-new-cascade \
+  --wait-ms 5000
+```
+
+## Companion Bridge Extension
+
+`antigravity-bus` now ships a tiny companion extension under [bridge-extension/package.json](/Users/caozheng/cowork-flie/antigravity-bus/bridge-extension/package.json). The extension polls a local inbox, executes Antigravity runtime commands such as `antigravity.sendPromptToAgentPanel`, and writes a machine-readable response into an outbox.
+
+Bridge layout:
+
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/inbox`
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/outbox`
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/status.json`
+
+Packaging the extension:
+
+```bash
+npm run bridge:pack
+```
+
+That produces `antigravity-bus-bridge.vsix` at the repository root. You can then install it into Antigravity with:
+
+```bash
+antigravity --install-extension /absolute/path/to/antigravity-bus-bridge.vsix
+```
+
+Once the extension is installed and Antigravity is running, you can send a bridge-backed request with:
+
+```bash
+npm run dispatch -- --cwd /absolute/path/to/workspace --prompt "Continue the task"
+```
+
 ## Output Model
 
 `snapshot` returns JSON shaped like:
@@ -223,7 +316,13 @@ node ./src/index.mjs watch \
   "supervisor": {
     "state": "idle",
     "activeCascadeIds": [],
-    "healthy": false
+    "healthy": false,
+    "acceptance": {
+      "state": "unknown",
+      "taskOutputDetected": false,
+      "checks": [],
+      "failedChecks": []
+    }
   },
   "userStatusAvailable": true,
   "authStatusAvailable": true,
@@ -238,6 +337,15 @@ node ./src/index.mjs watch \
 - `events.jsonl`
 
 `latest.json` is overwritten on every cycle. `events.jsonl` only appends when the normalized snapshot payload changes.
+
+Each event also includes an `acceptanceState` field so downstream supervisors can react to failed closure checks without re-reading the full snapshot.
+
+When `acceptance.state` is `failed`, the snapshot contains enough evidence to generate a stronger remediation prompt for the agent. The intended pattern is:
+
+- detect a failed closure check
+- restate the exact failure reason back to the agent
+- require the missing backend or refresh step explicitly
+- keep the next supervisor poll focused on whether acceptance moved out of `failed`
 
 See [examples/sample-snapshot.json](./examples/sample-snapshot.json) for a minimal example.
 

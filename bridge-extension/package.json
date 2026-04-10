@@ -1,0 +1,41 @@
+{
+  "name": "antigravity-bus-bridge",
+  "displayName": "Antigravity Bus Bridge",
+  "description": "Companion bridge for antigravity-bus. Reads local queue files and dispatches prompts through Antigravity runtime commands.",
+  "version": "0.0.1",
+  "publisher": "karzanOnline",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karzanOnline/antigravity-bus.git"
+  },
+  "homepage": "https://github.com/karzanOnline/antigravity-bus",
+  "files": [
+    "extension.js",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:antigravityBusBridge.processInbox"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "antigravityBusBridge.processInbox",
+        "title": "Antigravity Bus Bridge: Process Inbox"
+      }
+    ]
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "license": "MIT"
+}

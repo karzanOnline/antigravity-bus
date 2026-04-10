@@ -12,12 +12,16 @@
     "discover": "node ./src/index.mjs discover",
     "snapshot": "node ./src/index.mjs snapshot",
     "watch": "node ./src/index.mjs watch",
+    "dispatch": "node ./src/index.mjs dispatch",
+    "ipc-dispatch": "node ./src/index.mjs ipc-dispatch",
     "test": "node --test",
+    "bridge:pack": "cd bridge-extension && npx @vscode/vsce package --out ../antigravity-bus-bridge.vsix",
     "pack:dry-run": "npm pack --dry-run",
     "release:check": "npm test && npm pack --dry-run",
     "prepublishOnly": "npm run release:check"
   },
   "files": [
+    "bridge-extension",
     "src",
     "examples",
     "README.md",
