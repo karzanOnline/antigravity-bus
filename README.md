@@ -1,5 +1,7 @@
 # antigravity-bus
 
+English | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/karzanOnline/antigravity-bus/actions/workflows/ci.yml/badge.svg)](https://github.com/karzanOnline/antigravity-bus/actions/workflows/ci.yml)
 
 `antigravity-bus` is a local-first observability bus for Antigravity.
@@ -155,6 +157,8 @@ antigravity-bus watch \
 antigravity-bus dispatch \
   --cwd /absolute/path/to/workspace \
   --prompt "做到哪里" \
+  --wait-for-completion \
+  --auto-remediate \
   --wait-ms 5000
 ```
 
@@ -164,7 +168,7 @@ You can also use the npm scripts:
 npm run discover
 npm run snapshot -- --cwd /absolute/path/to/workspace
 npm run watch -- --cwd /absolute/path/to/workspace
-npm run dispatch -- --cwd /absolute/path/to/workspace --prompt "做到哪里"
+npm run dispatch -- --cwd /absolute/path/to/workspace --prompt "做到哪里" --wait-for-completion --auto-remediate
 ```
 
 If you are running directly from source without a global install, replace `antigravity-bus` with `node ./src/index.mjs`.
@@ -228,6 +232,14 @@ Options:
 - `--add-file <path>`: attach one or more files to the chat request
 - `--wait-ms <ms>`: how long to wait for a bridge response file
 - `--bridge-dir <path>`: override the local queue directory, default `~/Library/Application Support/Antigravity/antigravity-bus-bridge`
+- `--wait-for-completion`: continue polling supervisor state after the bridge acknowledges the command
+- `--completion-timeout-ms <ms>`: maximum completion wait, default `120000`
+- `--auto-approve`: when supervisor detects `waiting`, try a built-in approval command sequence before giving up
+  This includes edit approvals and plan/review approvals such as `antigravity.acceptAgentStep` and `notification.acceptPrimaryAction`.
+- `--approval-timeout-ms <ms>`: max time reserved for the automatic approval sequence, default `30000`
+- `--auto-remediate`: if completion returns `failed`, send a supervisor-generated corrective prompt back into Antigravity
+- `--max-remediations <n>`: cap the number of automatic remediation attempts, default `1`
+- `--supervisor-loop-timeout-ms <ms>`: overall timeout for the remediation loop, default `300000`
 
 Example:
 
@@ -235,6 +247,9 @@ Example:
 node ./src/index.mjs dispatch \
   --cwd /Users/example/project \
   --prompt "做到哪里" \
+  --wait-for-completion \
+  --auto-approve \
+  --auto-remediate \
   --wait-ms 5000
 ```
 
@@ -268,8 +283,12 @@ node ./src/index.mjs ipc-dispatch \
 
 Bridge layout:
 
-- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/inbox`
-- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/outbox`
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/workers/<workerId>/inbox`
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/workers/<workerId>/outbox`
+- `~/Library/Application Support/Antigravity/antigravity-bus-bridge/workers/<workerId>/status.json`
+
+For backward compatibility, the extension also mirrors the latest worker status to:
+
 - `~/Library/Application Support/Antigravity/antigravity-bus-bridge/status.json`
 
 Packaging the extension:
@@ -346,6 +365,13 @@ When `acceptance.state` is `failed`, the snapshot contains enough evidence to ge
 - restate the exact failure reason back to the agent
 - require the missing backend or refresh step explicitly
 - keep the next supervisor poll focused on whether acceptance moved out of `failed`
+
+When `dispatch --wait-for-completion` encounters a `waiting` supervisor state, the completion result now carries compact `topicSignals` plus an `approvals` array. That lets the caller distinguish:
+
+- a clean terminal completion
+- a chat-only completion where the agent answered without modifying the workspace (`completed_chat_only`)
+- a failed acceptance that should trigger remediation
+- a blocked user-interaction state where automatic approval either succeeded or exhausted its candidates
 
 See [examples/sample-snapshot.json](./examples/sample-snapshot.json) for a minimal example.
 

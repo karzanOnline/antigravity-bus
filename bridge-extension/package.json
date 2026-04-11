@@ -2,7 +2,7 @@
   "name": "antigravity-bus-bridge",
   "displayName": "Antigravity Bus Bridge",
   "description": "Companion bridge for antigravity-bus. Reads local queue files and dispatches prompts through Antigravity runtime commands.",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "publisher": "karzanOnline",
   "repository": {
     "type": "git",
